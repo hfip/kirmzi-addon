@@ -1,0 +1,14 @@
+{
+  "name": "kirmzi-addon",
+  "version": "1.0.0",
+  "description": "Kirmzi Stremio Addon by Abdulluh.X",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10",
+    "node-fetch": "^2.6.9",
+    "cheerio": "^1.0.0"
+  }
+}
