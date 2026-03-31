@@ -1,4 +1,4 @@
-const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const { getRouter } = require("stremio-addon-sdk");
 const fetch = require("node-fetch");
 const cheerio = require("cheerio");
 
@@ -16,22 +16,18 @@ const manifest = {
     version: "1.0.0",
     name: "Kirmzi by Abdulluh.X",
     description: "مسلسلات تركية بترجمة عربية من قرمزي",
-    logo: "https://raw.githubusercontent.com/hfip/arabic-providers/main/IMG_5223.jpeg",
     resources: ["stream"],
     types: ["series"],
     catalogs: [],
     idPrefixes: ["tt"]
 };
 
-const builder = new addonBuilder(manifest);
-
 async function fetchText(url) {
     try {
-        const res = await fetch(url, { headers: HEADERS, timeout: 15000 });
+        const res = await fetch(url, { headers: HEADERS });
         if (!res.ok) return "";
         return await res.text();
     } catch (e) {
-        console.log(`[Kirmzi] fetch error: ${e.message}`);
         return "";
     }
 }
@@ -67,9 +63,9 @@ function extractAlbaUrl(html) {
     return slug ? `${ALBA_BASE}/${slug}/` : "";
 }
 
-function unpackPACK(packed) {
+function unpackPACK(html) {
     try {
-        const match = packed.match(/eval\(function\(p,a,c,k,e,d\)\{[\s\S]*?\}\('((?:[^'\\]|\\.)*)',\s*(\d+)\s*,\s*(\d+)\s*,'((?:[^'\\]|\\.)*)'.split\('\|'\)/);
+        const match = html.match(/eval\(function\(p,a,c,k,e,d\)\{[\s\S]*?\}\('((?:[^'\\]|\\.)*)',\s*(\d+)\s*,\s*(\d+)\s*,'((?:[^'\\]|\\.)*)'.split\('\|'\)/);
         if (!match) return "";
         let [, p, a, c, k] = match;
         a = parseInt(a); c = parseInt(c); k = k.split("|");
@@ -85,7 +81,57 @@ function unpackPACK(packed) {
 async function extractM3u8FromEmbed(embedUrl) {
     const html = await fetchText(embedUrl);
     if (!html) return null;
-    const packed = html.match(/eval\(function\(p,a,c,k,e,d\)/)?.[0];
-    if (packed) {
+    if (html.includes("eval(function(p,a,c,k,e,d)")) {
         const unpacked = unpackPACK(html);
-        const m3u8 = unpacked.match(/(?:file|src)\s*:\s*"(https​​​​​​​​​​​​​​​​
+        const m3u8 = unpacked.match(/(?:file|src)\s*:\s*"(https?:\/\/[^"]*\.m3u8[^"]*)"/)?.[1];
+        if (m3u8) return { url: m3u8, embedUrl };
+    }
+    const direct = html.match(/(?:file|src)\s*:\s*["'](https?:\/\/[^"']*\.m3u8[^"']*)["']/)?.[1];
+    if (direct) return { url: direct, embedUrl };
+    return null;
+}
+
+async function extractFromAlba(albaUrl) {
+    const html = await fetchText(albaUrl);
+    if (!html) return null;
+    const iframeMatch = html.match(/iframe[^>]*src="(https?:\/\/[^"]*embed[^"]*)"/i);
+    if (!iframeMatch) return null;
+    return await extractM3u8FromEmbed(iframeMatch[1]);
+}
+
+async function searchForEpisode(meta, episode) {
+    const terms = [meta.arabicTitle, meta.englishTitle, meta.originalTitle].filter(Boolean);
+    for (const term of terms) {
+        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(term)}`);
+        if (!html) continue;
+        const $ = cheerio.load(html);
+        let found = "";
+        $("a[href*='/episode/']").each((_, el) => {
+            const href = $(el).attr("href") || "";
+            const decoded = decodeURIComponent(href);
+            const epMatch = decoded.match(/الحلقة-(\d+)/);
+            if (epMatch && parseInt(epMatch[1]) === parseInt(episode)) {
+                found = href;
+            }
+        });
+        if (found) return found;
+    }
+    return "";
+}
+
+async function getStreams(type, id) {
+    try {
+        const parts = id.split(":");
+        const tmdbId = parts[0];
+        const season = parts[1] || "1";
+        const episode = parts[2];
+        if (!episode) return [];
+
+        const meta = await getTmdbMeta(tmdbId);
+
+        let albaUrl = "";
+        if (meta.arabicTitle) {
+            const epUrl = buildEpisodeUrl(meta.arabicTitle, episode);
+            const html = await fetchText(epUrl);
+            if (html) albaUrl = extractAlbaUrl(html);
+        }
